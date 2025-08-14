@@ -20,8 +20,14 @@ import {
   TrendingUp,
   LogOut,
   User,
-  Settings
+  Settings,
+  Loader,
+  CheckCircle,
+  AlertCircle
 } from 'lucide-react';
+
+// Import API services
+import { imageAPI, voiceAPI, chatAPI, dashboardAPI, reportsAPI, AudioRecorder, handleAPIError } from './services/api';
 
 // Authentication Components
 const LoginForm = ({ onLogin, switchToRegister }) => {
@@ -315,6 +321,14 @@ const MedicalAIDashboard = ({ user, onLogout }) => {
   const [isRecording, setIsRecording] = useState(false);
   const [chatMessage, setChatMessage] = useState('');
   const [uploadedImage, setUploadedImage] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [currentExamId, setCurrentExamId] = useState(null);
+  const [audioRecorder] = useState(new AudioRecorder());
+  const [dashboardStats, setDashboardStats] = useState(null);
+  const [chatHistory, setChatHistory] = useState([]);
+  const [currentConversationId, setCurrentConversationId] = useState(null);
+  const [analysisResult, setAnalysisResult] = useState(null);
+  const [transcriptionResult, setTranscriptionResult] = useState(null);
 
   const imageTypes = [
     { id: 'chest', label: 'Chest X-Ray', icon: Heart, description: 'Lung, heart, and chest cavity analysis' },
@@ -334,27 +348,162 @@ const MedicalAIDashboard = ({ user, onLogout }) => {
     { id: 'ophthalmology', label: 'Eye Examination' }
   ];
 
-  const dashboardStats = [
-    { label: 'Images Analyzed', value: '1,234', icon: Scan, color: 'text-green-600' },
-    { label: 'Voice Exams', value: '567', icon: Mic, color: 'text-blue-600' },
-    { label: 'Chat Consultations', value: '890', icon: MessageCircle, color: 'text-purple-600' },
-    { label: 'Total Diagnoses', value: '2,691', icon: Activity, color: 'text-emerald-600' }
-  ];
+  // Load dashboard stats on component mount
+  useEffect(() => {
+    loadDashboardStats();
+  }, []);
 
-  const handleImageUpload = (event) => {
+  // Initialize chat conversation when switching to chat tab
+  useEffect(() => {
+    if (activeTab === 'chat' && !currentConversationId) {
+      initializeChatConversation();
+    }
+  }, [activeTab]);
+
+  const loadDashboardStats = async () => {
+    try {
+      const response = await dashboardAPI.getStats();
+      setDashboardStats(response.stats);
+    } catch (error) {
+      console.error('Failed to load dashboard stats:', error);
+    }
+  };
+
+  const initializeChatConversation = async () => {
+    try {
+      const response = await chatAPI.createConversation();
+      setCurrentConversationId(response.conversationId);
+      setChatHistory([{
+        type: 'ai',
+        message: `Hello Dr. ${user.name}! I'm your AI medical assistant. How can I help you today?`,
+        timestamp: new Date()
+      }]);
+    } catch (error) {
+      console.error('Failed to initialize chat:', error);
+    }
+  };
+
+  const handleImageUpload = async (event) => {
     const file = event.target.files[0];
-    if (file) {
-      setUploadedImage(URL.createObjectURL(file));
+    if (!file) return;
+
+    setUploadedImage(URL.createObjectURL(file));
+    setLoading(true);
+    setAnalysisResult(null);
+
+    try {
+      const response = await imageAPI.analyzeImage(file, selectedImageType);
+      setAnalysisResult(response.analysis);
+      await loadDashboardStats(); // Refresh stats
+    } catch (error) {
+      alert(handleAPIError(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const startVoiceExam = async () => {
+    if (!selectedExamType) {
+      alert('Please select an examination type first');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const response = await voiceAPI.startExam(selectedExamType);
+      setCurrentExamId(response.examId);
+      
+      const recordingStarted = await audioRecorder.startRecording();
+      if (recordingStarted) {
+        setIsRecording(true);
+      } else {
+        alert('Failed to start recording. Please check microphone permissions.');
+      }
+    } catch (error) {
+      alert(handleAPIError(error));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const stopVoiceExam = async () => {
+    try {
+      setLoading(true);
+      const audioBlob = await audioRecorder.stopRecording();
+      setIsRecording(false);
+
+      if (audioBlob && currentExamId) {
+        const response = await voiceAPI.uploadAudio(currentExamId, audioBlob);
+        setTranscriptionResult(response);
+        await loadDashboardStats(); // Refresh stats
+      }
+    } catch (error) {
+      alert(handleAPIError(error));
+    } finally {
+      setLoading(false);
     }
   };
 
   const toggleRecording = () => {
-    setIsRecording(!isRecording);
+    if (isRecording) {
+      stopVoiceExam();
+    } else {
+      startVoiceExam();
+    }
   };
 
-  const sendChatMessage = () => {
-    if (chatMessage.trim()) {
-      setChatMessage('');
+  const sendChatMessage = async () => {
+    if (!chatMessage.trim() || !currentConversationId) return;
+
+    const userMessage = {
+      type: 'user',
+      message: chatMessage,
+      timestamp: new Date()
+    };
+
+    setChatHistory(prev => [...prev, userMessage]);
+    setChatMessage('');
+    setLoading(true);
+
+    try {
+      const response = await chatAPI.sendMessage(currentConversationId, chatMessage);
+      
+      const aiMessage = {
+        type: 'ai',
+        message: response.response,
+        timestamp: new Date()
+      };
+
+      setChatHistory(prev => [...prev, aiMessage]);
+      await loadDashboardStats(); // Refresh stats
+    } catch (error) {
+      setChatHistory(prev => [...prev, {
+        type: 'ai',
+        message: 'Sorry, I encountered an error. Please try again.',
+        timestamp: new Date()
+      }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const generatePDFReport = async () => {
+    if (!transcriptionResult) return;
+
+    try {
+      setLoading(true);
+      const response = await reportsAPI.generateReport(
+        'voice_exam',
+        currentExamId,
+        transcriptionResult
+      );
+      
+      // Open download link
+      reportsAPI.downloadReport(response.reportId);
+    } catch (error) {
+      alert(handleAPIError(error));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -369,7 +518,8 @@ const MedicalAIDashboard = ({ user, onLogout }) => {
               <button
                 key={type.id}
                 onClick={() => setSelectedImageType(type.id)}
-                className={`p-4 rounded-lg border-2 transition-all duration-200 ${
+                disabled={loading}
+                className={`p-4 rounded-lg border-2 transition-all duration-200 disabled:opacity-50 ${
                   selectedImageType === type.id
                     ? 'border-green-500 bg-green-50'
                     : 'border-gray-200 hover:border-green-300 hover:bg-gray-50'
@@ -392,21 +542,49 @@ const MedicalAIDashboard = ({ user, onLogout }) => {
           <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-green-400 transition-colors">
             <Upload className="w-12 h-12 text-gray-400 mx-auto mb-4" />
             <p className="text-gray-600 mb-2">Drag and drop your medical image here, or</p>
-            <label className="inline-block bg-green-600 text-white px-6 py-2 rounded-lg cursor-pointer hover:bg-green-700 transition-colors">
-              Choose File
-              <input type="file" className="hidden" accept="image/*" onChange={handleImageUpload} />
+            <label className={`inline-block px-6 py-2 rounded-lg cursor-pointer transition-colors ${
+              loading ? 'bg-gray-400' : 'bg-green-600 hover:bg-green-700'
+            } text-white`}>
+              {loading ? 'Processing...' : 'Choose File'}
+              <input 
+                type="file" 
+                className="hidden" 
+                accept="image/*" 
+                onChange={handleImageUpload}
+                disabled={loading}
+              />
             </label>
           </div>
           
           {uploadedImage && (
             <div className="mt-6">
               <img src={uploadedImage} alt="Uploaded medical image" className="max-w-md mx-auto rounded-lg shadow-md" />
-              <div className="mt-4 p-4 bg-green-50 rounded-lg">
-                <h4 className="font-medium text-green-800 mb-2">AI Analysis in Progress...</h4>
-                <div className="w-full bg-gray-200 rounded-full h-2">
-                  <div className="bg-green-600 h-2 rounded-full animate-pulse" style={{width: '60%'}}></div>
+              
+              {loading && (
+                <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Loader className="w-4 h-4 animate-spin text-blue-600" />
+                    <h4 className="font-medium text-blue-800">AI Analysis in Progress...</h4>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div className="bg-blue-600 h-2 rounded-full animate-pulse" style={{width: '60%'}}></div>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {analysisResult && (
+                <div className="mt-4 p-4 bg-green-50 rounded-lg">
+                  <div className="flex items-center gap-2 mb-3">
+                    <CheckCircle className="w-5 h-5 text-green-600" />
+                    <h4 className="font-medium text-green-800">Analysis Complete</h4>
+                  </div>
+                  <div className="space-y-2 text-sm">
+                    <p><strong>Diagnosis:</strong> {analysisResult.diagnosis}</p>
+                    <p><strong>Confidence:</strong> {(analysisResult.confidence * 100).toFixed(1)}%</p>
+                    <p><strong>Recommendations:</strong> {analysisResult.recommendations}</p>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -423,7 +601,8 @@ const MedicalAIDashboard = ({ user, onLogout }) => {
             <button
               key={type.id}
               onClick={() => setSelectedExamType(type.id)}
-              className={`p-3 rounded-lg border transition-all duration-200 text-left ${
+              disabled={isRecording || loading}
+              className={`p-3 rounded-lg border transition-all duration-200 text-left disabled:opacity-50 ${
                 selectedExamType === type.id
                   ? 'border-green-500 bg-green-50 text-green-700'
                   : 'border-gray-200 hover:border-green-300 hover:bg-gray-50'
@@ -444,11 +623,18 @@ const MedicalAIDashboard = ({ user, onLogout }) => {
             }`}>
               <button
                 onClick={toggleRecording}
-                className={`w-20 h-20 rounded-full flex items-center justify-center transition-all ${
+                disabled={loading && !isRecording}
+                className={`w-20 h-20 rounded-full flex items-center justify-center transition-all disabled:opacity-50 ${
                   isRecording ? 'bg-red-500 hover:bg-red-600' : 'bg-green-600 hover:bg-green-700'
                 }`}
               >
-                {isRecording ? <Pause className="w-8 h-8 text-white" /> : <Mic className="w-8 h-8 text-white" />}
+                {loading && !isRecording ? (
+                  <Loader className="w-8 h-8 text-white animate-spin" />
+                ) : isRecording ? (
+                  <Pause className="w-8 h-8 text-white" />
+                ) : (
+                  <Mic className="w-8 h-8 text-white" />
+                )}
               </button>
             </div>
             <p className="text-gray-600 mb-4">
@@ -461,14 +647,31 @@ const MedicalAIDashboard = ({ user, onLogout }) => {
             )}
           </div>
 
-          <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-            <h4 className="font-medium text-gray-800 mb-2">Session Summary</h4>
-            <p className="text-sm text-gray-600 mb-3">AI will generate examination summary and diagnosis here...</p>
-            <button className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors">
-              <Download className="w-4 h-4" />
-              Download PDF Report
-            </button>
-          </div>
+          {transcriptionResult && (
+            <div className="mt-6 space-y-4">
+              <div className="p-4 bg-gray-50 rounded-lg">
+                <h4 className="font-medium text-gray-800 mb-2">Transcript</h4>
+                <p className="text-sm text-gray-600">{transcriptionResult.transcript}</p>
+              </div>
+              
+              <div className="p-4 bg-green-50 rounded-lg">
+                <h4 className="font-medium text-green-800 mb-2">AI Analysis Summary</h4>
+                <div className="space-y-2 text-sm">
+                  <p><strong>Summary:</strong> {transcriptionResult.summary}</p>
+                  <p><strong>Diagnosis:</strong> {transcriptionResult.diagnosis}</p>
+                  <p><strong>Recommendations:</strong> {transcriptionResult.recommendations}</p>
+                </div>
+                <button 
+                  onClick={generatePDFReport}
+                  disabled={loading}
+                  className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors mt-3 disabled:opacity-50"
+                >
+                  {loading ? <Loader className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                  {loading ? 'Generating...' : 'Download PDF Report'}
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -479,9 +682,29 @@ const MedicalAIDashboard = ({ user, onLogout }) => {
       <h3 className="text-xl font-semibold text-gray-800 mb-4">AI Medical Assistant</h3>
       <div className="flex-1 bg-gray-50 rounded-lg p-4 mb-4 overflow-y-auto">
         <div className="space-y-3">
-          <div className="bg-green-100 rounded-lg p-3 max-w-xs">
-            <p className="text-sm text-green-800">Hello Dr. {user.name}! I'm your AI medical assistant. How can I help you today?</p>
-          </div>
+          {chatHistory.map((chat, index) => (
+            <div
+              key={index}
+              className={`rounded-lg p-3 max-w-xs ${
+                chat.type === 'ai'
+                  ? 'bg-green-100 text-green-800'
+                  : 'bg-blue-100 text-blue-800 ml-auto'
+              }`}
+            >
+              <p className="text-sm">{chat.message}</p>
+              <p className="text-xs opacity-70 mt-1">
+                {new Date(chat.timestamp).toLocaleTimeString()}
+              </p>
+            </div>
+          ))}
+          {loading && (
+            <div className="bg-gray-100 rounded-lg p-3 max-w-xs">
+              <div className="flex items-center gap-2">
+                <Loader className="w-4 h-4 animate-spin" />
+                <p className="text-sm text-gray-600">AI is thinking...</p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
       <div className="flex gap-2">
@@ -491,260 +714,264 @@ const MedicalAIDashboard = ({ user, onLogout }) => {
           onChange={(e) => setChatMessage(e.target.value)}
           placeholder="Ask about diagnosis, treatment options, or medical decisions..."
           className="flex-1 border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-green-500"
-          onKeyPress={(e) => e.key === 'Enter' && sendChatMessage()}
+          onKeyPress={(e) => e.key === 'Enter' && !loading && sendChatMessage()}
+          disabled={loading}
         />
         <button
           onClick={sendChatMessage}
-          className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
+          disabled={loading || !chatMessage.trim()}
+          className="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50"
         >
-          <Send className="w-4 h-4" />
+          {loading ? <Loader className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
         </button>
       </div>
     </div>
   );
 
-  const renderDashboard = () => (
-    <div className="space-y-6">
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {dashboardStats.map((stat, index) => {
-          const IconComponent = stat.icon;
-          return (
-            <div key={index} className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="text-sm text-gray-600">{stat.label}</p>
-                  <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
-                </div>
-                <IconComponent className={`w-8 h-8 ${stat.color}`} />
-              </div>
-            </div>
-          );
-        })}
-      </div>
+  const renderDashboard = () => {
+    const defaultStats = {
+      imagesAnalyzed: 0,
+      voiceExams: 0,
+      chatMessages: 0,
+      totalDiagnoses: 0
+    };
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">Recent Activity</h3>
-          <div className="space-y-3">
-            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-              <Scan className="w-5 h-5 text-green-600" />
-              <div>
-                <p className="text-sm font-medium">Chest X-Ray analyzed</p>
-                <p className="text-xs text-gray-600">2 minutes ago</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-              <Mic className="w-5 h-5 text-blue-600" />
-              <div>
-                <p className="text-sm font-medium">Cardiology exam completed</p>
-                <p className="text-xs text-gray-600">15 minutes ago</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg">
-              <MessageCircle className="w-5 h-5 text-purple-600" />
-              <div>
-                <p className="text-sm font-medium">Chat consultation</p>
-                <p className="text-xs text-gray-600">1 hour ago</p>
-              </div>
-            </div>
-          </div>
-        </div>
+    const stats = dashboardStats || defaultStats;
+    const statsArray = [
+      { label: 'Images Analyzed', value: stats.imagesAnalyzed, icon: Scan, color: 'text-green-600' },
+      { label: 'Voice Exams', value: stats.voiceExams, icon: Mic, color: 'text-blue-600' },
+      { label: 'Chat Consultations', value: stats.chatMessages, icon: MessageCircle, color: 'text-purple-600' },
+      { label: 'Total Diagnoses', value: stats.totalDiagnoses, icon: Activity, color: 'text-emerald-600' }
+    ];
 
-        <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4">Usage Analytics</h3>
-          <div className="space-y-4">
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>Image Analysis</span>
-                <span>85%</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div className="bg-green-600 h-2 rounded-full" style={{width: '85%'}}></div>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>Voice Exams</span>
-                <span>70%</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div className="bg-blue-600 h-2 rounded-full" style={{width: '70%'}}></div>
-              </div>
-            </div>
-            <div>
-              <div className="flex justify-between text-sm mb-1">
-                <span>Chat Support</span>
-                <span>92%</span>
-              </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div className="bg-purple-600 h-2 rounded-full" style={{width: '92%'}}></div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
+    return (
+      <div className="space-y-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {statsArray.map((stat, index) => {
+            const IconComponent = stat.icon;
+            return (
+               <div key={index} className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+               <div className="flex items-center justify-between">
+                 <div>
+                   <p className="text-sm text-gray-600">{stat.label}</p>
+                   <p className={`text-2xl font-bold ${stat.color}`}>{stat.value}</p>
+                 </div>
+                 <IconComponent className={`w-8 h-8 ${stat.color}`} />
+               </div>
+             </div>
+           );
+         })}
+       </div>
 
-  return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <header className="bg-white shadow-sm border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
-                <Activity className="w-6 h-6 text-white" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold text-gray-900">MedKit AI</h1>
-                <p className="text-sm text-gray-600">Medical AI Assistant</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-gray-600">Dr. {user.name}</span>
-              <span className="text-xs text-gray-500">{user.specialization}</span>
-              <button
-                onClick={onLogout}
-                className="flex items-center gap-2 text-gray-600 hover:text-gray-900 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors"
-              >
-                <LogOut className="w-4 h-4" />
-                Logout
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
+       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+           <h3 className="text-lg font-semibold text-gray-800 mb-4">Welcome Back, Dr. {user.name}</h3>
+           <div className="space-y-3">
+             <div className="p-3 bg-green-50 rounded-lg">
+               <p className="text-sm font-medium text-green-800">Ready to assist with medical imaging analysis</p>
+               <p className="text-xs text-green-600">AI models loaded and ready</p>
+             </div>
+             <div className="p-3 bg-blue-50 rounded-lg">
+               <p className="text-sm font-medium text-blue-800">Voice examination system active</p>
+               <p className="text-xs text-blue-600">Speech recognition ready</p>
+             </div>
+             <div className="p-3 bg-purple-50 rounded-lg">
+               <p className="text-sm font-medium text-purple-800">AI medical assistant online</p>
+               <p className="text-xs text-purple-600">Ready for consultations</p>
+             </div>
+           </div>
+         </div>
 
-      {/* Navigation */}
-      <nav className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex space-x-8">
-            {[
-              { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
-              { id: 'imaging', label: 'Image Analysis', icon: Scan },
-              { id: 'voice', label: 'Voice Assistant', icon: Mic },
-              { id: 'chat', label: 'AI Chatbot', icon: MessageCircle }
-            ].map((tab) => {
-              const IconComponent = tab.icon;
-              return (
-                <button
-                  key={tab.id}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center gap-2 px-3 py-4 border-b-2 transition-colors ${
-                    activeTab === tab.id
-                      ? 'border-green-500 text-green-600'
-                      : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
-                  }`}
-                >
-                  <IconComponent className="w-4 h-4" />
-                  {tab.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      </nav>
+         <div className="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+           <h3 className="text-lg font-semibold text-gray-800 mb-4">Quick Actions</h3>
+           <div className="space-y-2">
+             <button
+               onClick={() => setActiveTab('imaging')}
+               className="w-full text-left p-3 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-3"
+             >
+               <Scan className="w-5 h-5 text-green-600" />
+               <span>Analyze Medical Image</span>
+             </button>
+             <button
+               onClick={() => setActiveTab('voice')}
+               className="w-full text-left p-3 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-3"
+             >
+               <Mic className="w-5 h-5 text-blue-600" />
+               <span>Start Voice Examination</span>
+             </button>
+             <button
+               onClick={() => setActiveTab('chat')}
+               className="w-full text-left p-3 rounded-lg hover:bg-gray-50 transition-colors flex items-center gap-3"
+             >
+               <MessageCircle className="w-5 h-5 text-purple-600" />
+               <span>Consult AI Assistant</span>
+             </button>
+           </div>
+         </div>
+       </div>
+     </div>
+   );
+ };
 
-      {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === 'dashboard' && renderDashboard()}
-        {activeTab === 'imaging' && renderImagingAnalysis()}
-        {activeTab === 'voice' && renderVoiceAssistant()}
-        {activeTab === 'chat' && renderChatbot()}
-      </main>
-    </div>
-  );
+ return (
+   <div className="min-h-screen bg-gray-50">
+     {/* Header */}
+     <header className="bg-white shadow-sm border-b border-gray-200">
+       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+         <div className="flex justify-between items-center h-16">
+           <div className="flex items-center gap-3">
+             <div className="w-10 h-10 bg-green-600 rounded-lg flex items-center justify-center">
+               <Activity className="w-6 h-6 text-white" />
+             </div>
+             <div>
+               <h1 className="text-xl font-bold text-gray-900">MedKit AI</h1>
+               <p className="text-sm text-gray-600">Medical AI Assistant</p>
+             </div>
+           </div>
+           <div className="flex items-center gap-4">
+             <span className="text-sm text-gray-600">Dr. {user.name}</span>
+             <span className="text-xs text-gray-500">{user.specialization}</span>
+             <button
+               onClick={onLogout}
+               className="flex items-center gap-2 text-gray-600 hover:text-gray-900 px-3 py-2 rounded-lg hover:bg-gray-100 transition-colors"
+             >
+               <LogOut className="w-4 h-4" />
+               Logout
+             </button>
+           </div>
+         </div>
+       </div>
+     </header>
+
+     {/* Navigation */}
+     <nav className="bg-white border-b border-gray-200">
+       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+         <div className="flex space-x-8">
+           {[
+             { id: 'dashboard', label: 'Dashboard', icon: BarChart3 },
+             { id: 'imaging', label: 'Image Analysis', icon: Scan },
+             { id: 'voice', label: 'Voice Assistant', icon: Mic },
+             { id: 'chat', label: 'AI Chatbot', icon: MessageCircle }
+           ].map((tab) => {
+             const IconComponent = tab.icon;
+             return (
+               <button
+                 key={tab.id}
+                 onClick={() => setActiveTab(tab.id)}
+                 className={`flex items-center gap-2 px-3 py-4 border-b-2 transition-colors ${
+                   activeTab === tab.id
+                     ? 'border-green-500 text-green-600'
+                     : 'border-transparent text-gray-600 hover:text-gray-900 hover:border-gray-300'
+                 }`}
+               >
+                 <IconComponent className="w-4 h-4" />
+                 {tab.label}
+               </button>
+             );
+           })}
+         </div>
+       </div>
+     </nav>
+
+     {/* Main Content */}
+     <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+       {activeTab === 'dashboard' && renderDashboard()}
+       {activeTab === 'imaging' && renderImagingAnalysis()}
+       {activeTab === 'voice' && renderVoiceAssistant()}
+       {activeTab === 'chat' && renderChatbot()}
+     </main>
+   </div>
+ );
 };
 
 // Main App Component with Authentication State Management
 const MedKitApp = () => {
-  const [user, setUser] = useState(null);
-  const [authView, setAuthView] = useState('login'); // 'login' or 'register'
-  const [loading, setLoading] = useState(true);
+ const [user, setUser] = useState(null);
+ const [authView, setAuthView] = useState('login'); // 'login' or 'register'
+ const [loading, setLoading] = useState(true);
 
-  // Check for existing auth token on app load
-  useEffect(() => {
-    const checkAuth = async () => {
-      const token = localStorage.getItem('token');
-      
-      if (token) {
-        try {
-          const response = await fetch('/api/auth/me', {
-            headers: { Authorization: `Bearer ${token}` }
-          });
-          
-          if (response.ok) {
-            const userData = await response.json();
-            setUser(userData);
-          } else {
-            localStorage.removeItem('token');
-          }
-        } catch (error) {
-          console.error('Auth check failed:', error);
-          localStorage.removeItem('token');
-        }
-      }
-      
-      setLoading(false);
-    };
+ // Check for existing auth token on app load
+ useEffect(() => {
+   const checkAuth = async () => {
+     const token = localStorage.getItem('token');
+     
+     if (token) {
+       try {
+         const response = await fetch('/api/auth/me', {
+           headers: { Authorization: `Bearer ${token}` }
+         });
+         
+         if (response.ok) {
+           const userData = await response.json();
+           setUser(userData);
+         } else {
+           localStorage.removeItem('token');
+         }
+       } catch (error) {
+         console.error('Auth check failed:', error);
+         localStorage.removeItem('token');
+       }
+     }
+     
+     setLoading(false);
+   };
 
-    checkAuth();
-  }, []);
+   checkAuth();
+ }, []);
 
-  const handleLogin = (userData) => {
-    setUser(userData);
-  };
+ const handleLogin = (userData) => {
+   setUser(userData);
+ };
 
-  const handleRegister = (userData) => {
-    setUser(userData);
-  };
+ const handleRegister = (userData) => {
+   setUser(userData);
+ };
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    setUser(null);
-    setAuthView('login');
-  };
+ const handleLogout = () => {
+   localStorage.removeItem('token');
+   setUser(null);
+   setAuthView('login');
+ };
 
-  if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-center">
-          <div className="w-16 h-16 bg-green-600 rounded-lg flex items-center justify-center mx-auto mb-4 animate-pulse">
-            <Activity className="w-8 h-8 text-white" />
-          </div>
-          <p className="text-gray-600">Loading MedKit AI...</p>
-        </div>
-      </div>
-    );
-  }
+ if (loading) {
+   return (
+     <div className="min-h-screen flex items-center justify-center bg-gray-50">
+       <div className="text-center">
+         <div className="w-16 h-16 bg-green-600 rounded-lg flex items-center justify-center mx-auto mb-4 animate-pulse">
+           <Activity className="w-8 h-8 text-white" />
+         </div>
+         <p className="text-gray-600">Loading MedKit AI...</p>
+       </div>
+     </div>
+   );
+ }
 
-  // If user is not authenticated, show auth forms
-  if (!user) {
-    if (authView === 'login') {
-      return (
-        <LoginForm 
-          onLogin={handleLogin}
-          switchToRegister={() => setAuthView('register')}
-        />
-      );
-    } else {
-      return (
-        <RegisterForm 
-          onRegister={handleRegister}
-          switchToLogin={() => setAuthView('login')}
-        />
-      );
-    }
-  }
+ // If user is not authenticated, show auth forms
+ if (!user) {
+   if (authView === 'login') {
+     return (
+       <LoginForm 
+         onLogin={handleLogin}
+         switchToRegister={() => setAuthView('register')}
+       />
+     );
+   } else {
+     return (
+       <RegisterForm 
+         onRegister={handleRegister}
+         switchToLogin={() => setAuthView('login')}
+       />
+     );
+   }
+ }
 
-  // If user is authenticated, show the main dashboard
-  return (
-    <MedicalAIDashboard 
-      user={user}
-      onLogout={handleLogout}
-    />
-  );
+ // If user is authenticated, show the main dashboard
+ return (
+   <MedicalAIDashboard 
+     user={user}
+     onLogout={handleLogout}
+   />
+ );
 };
 
 export default MedKitApp;

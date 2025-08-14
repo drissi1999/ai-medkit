@@ -1,0 +1,91 @@
+// server/database/schema.ts
+import { pgTable, serial, varchar, text, integer, decimal, timestamp, jsonb, boolean } from 'drizzle-orm/pg-core';
+
+// Users/Doctors table
+export const users = pgTable('users', {
+  id: serial('id').primaryKey(),
+  name: varchar('name', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }).unique().notNull(),
+  passwordHash: varchar('password_hash', { length: 255 }).notNull(),
+  specialization: varchar('specialization', { length: 100 }),
+  hospitalName: varchar('hospital_name', { length: 255 }),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
+
+// Image Analysis table
+export const imageAnalyses = pgTable('image_analyses', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id).notNull(),
+  imageType: varchar('image_type', { length: 50 }).notNull(),
+  imagePath: varchar('image_path', { length: 500 }).notNull(),
+  imageName: varchar('image_name', { length: 255 }).notNull(),
+  fileSize: integer('file_size'),
+  analysisResult: jsonb('analysis_result'),
+  confidenceScore: decimal('confidence_score', { precision: 5, scale: 4 }),
+  diagnosis: text('diagnosis'),
+  recommendations: text('recommendations'),
+  status: varchar('status', { length: 20 }).default('processing'),
+  createdAt: timestamp('created_at').defaultNow(),
+  analysisCompletedAt: timestamp('analysis_completed_at')
+});
+
+// Voice Examinations table
+export const voiceExaminations = pgTable('voice_examinations', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id).notNull(),
+  examType: varchar('exam_type', { length: 50 }).notNull(),
+  patientContext: jsonb('patient_context'),
+  audioFilePath: varchar('audio_file_path', { length: 500 }),
+  transcript: text('transcript'),
+  summary: text('summary'),
+  diagnosis: text('diagnosis'),
+  recommendations: text('recommendations'),
+  confidenceScore: decimal('confidence_score', { precision: 5, scale: 4 }),
+  durationSeconds: integer('duration_seconds'),
+  status: varchar('status', { length: 20 }).default('recording'),
+  createdAt: timestamp('created_at').defaultNow(),
+  completedAt: timestamp('completed_at')
+});
+
+// Chat Conversations table
+export const chatConversations = pgTable('chat_conversations', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id).notNull(),
+  title: varchar('title', { length: 255 }),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow()
+});
+
+// Chat Messages table
+export const chatMessages = pgTable('chat_messages', {
+  id: serial('id').primaryKey(),
+  conversationId: integer('conversation_id').references(() => chatConversations.id).notNull(),
+  userId: integer('user_id').references(() => users.id).notNull(),
+  message: text('message').notNull(),
+  response: text('response'),
+  messageType: varchar('message_type', { length: 20 }).default('question'),
+  aiModelUsed: varchar('ai_model_used', { length: 50 }),
+  responseTimeMs: integer('response_time_ms'),
+  createdAt: timestamp('created_at').defaultNow()
+});
+
+// Analytics table
+export const analytics = pgTable('analytics', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id).notNull(),
+  actionType: varchar('action_type', { length: 50 }).notNull(),
+  details: jsonb('details'),
+  createdAt: timestamp('created_at').defaultNow()
+});
+
+// Reports table
+export const reports = pgTable('reports', {
+  id: serial('id').primaryKey(),
+  userId: integer('user_id').references(() => users.id).notNull(),
+  reportType: varchar('report_type', { length: 50 }),
+  relatedId: integer('related_id'),
+  reportData: jsonb('report_data'),
+  pdfPath: varchar('pdf_path', { length: 500 }),
+  createdAt: timestamp('created_at').defaultNow()
+});

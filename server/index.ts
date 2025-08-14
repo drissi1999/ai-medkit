@@ -1,10 +1,17 @@
+import "dotenv/config";
 import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
+import authRoutes from "./routes/auth.js";
 import { setupVite, serveStatic, log } from "./vite";
+import medicalRoutes from './routes/medical.js';
+import authRoutes from "./routes/auth.js";
 
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
+app.use('/api/medical', medicalRoutes);
+app.use("/api/auth", authRoutes);
+app.use('/uploads', express.static('uploads'));
 
 app.use((req, res, next) => {
   const start = Date.now();
