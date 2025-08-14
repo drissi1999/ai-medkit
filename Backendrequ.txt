@@ -1,0 +1,93 @@
+# Core FastAPI & Web Framework
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic>=2.7,<3.0
+pydantic-settings==2.1.0
+
+# Database & ORM
+sqlalchemy==2.0.23
+alembic==1.13.1
+asyncpg==0.29.0  # PostgreSQL async driver
+psycopg2-binary==2.9.9
+
+# Redis & Caching
+redis==4.6.0
+
+# Authentication & Security
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+
+# AI & ML Libraries
+openai>=1.6.1,<2.0.0
+anthropic==0.7.8
+langchain==0.0.350
+langchain-openai==0.0.2
+sentence-transformers==2.2.2
+transformers==4.36.2
+torch==2.4.1
+numpy==1.26.4
+scikit-learn==1.3.2
+
+# Medical AI Specialized
+pydicom==2.4.3  # DICOM image processing
+nibabel==5.1.0   # Neuroimaging (MRI/CT)
+opencv-python-headless==4.8.1.78
+pillow==10.1.0
+
+# Vector Database
+qdrant-client==1.7.0
+
+# Natural Language Processing
+spacy==3.7.2
+nltk==3.8.1
+textblob==0.17.1
+
+# Medical Standards & Integration
+fhir.resources>=7.1.0
+hl7>=0.4,<0.5     # HL7 integration
+requests==2.31.0
+
+# Calendar & Email Integration
+google-auth==2.25.2
+google-auth-oauthlib==1.2.0
+google-api-python-client==2.111.0
+exchangelib==5.0.1  # Microsoft Exchange
+sendgrid==6.10.0   # Email service
+jinja2==3.1.2      # Email templates
+
+# File Processing & Storage
+boto3==1.34.0      # AWS S3 compatible storage
+minio==7.2.0       # Self-hosted S3 alternative
+pandas==2.1.4     # Data processing
+openpyxl==3.1.2    # Excel files
+python-docx==1.1.0 # Word documents
+
+# Async & Background Tasks
+celery[redis]==5.3.4
+aiofiles==23.2.1
+httpx==0.25.2
+
+# Development & Testing
+pytest==7.4.3
+pytest-asyncio==0.21.1
+pytest-mock==3.12.0
+factory-boy==3.3.0
+faker==20.1.0
+
+# Monitoring & Logging
+structlog==23.2.0
+sentry-sdk[fastapi]==1.38.0
+prometheus-client==0.19.0
+
+# Utilities
+python-dateutil==2.8.2
+pytz==2023.3
+pycryptodome==3.19.0
+qrcode==7.4.2
+phonenumbers==8.13.25
+
+# GDPR Compliance & Privacy
+cryptography==41.0.7
+anonymizeip==1.0.0
+torchaudio==2.4.1
